@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>okx ws</title>
+    <link rel="stylesheet" href=".\src\okx.css">
+    <script type="text/javascript" src=".\crypto-js\crypto-js.js">
+        // object is CryptoJS
+        //CryptoJS.HmacSHA256
+        //CryptoJS.enc.Base64
+    </script>
+    <script type="text/javascript" src=".\src\vars.js"></script>
+    <script type="text/javascript" src=".\src\args.js"></script>
+    <script type="text/javascript" src=".\src\ping.js"></script>
+    <script type="text/javascript" src=".\src\tools.js"></script>
+    <script type="text/javascript" src=".\src\ws_public.js"></script>
+    <script type="text/javascript" src=".\src\rest.js"></script>
+    <script type="text/javascript" src=".\src\order.js"></script>
+    <script type="text/javascript" src=".\src\algo.js"></script>
+    <script type="text/javascript" src=".\src\analysis.js"></script>
+</head>
+<body bgcolor="#000" text="#AAA">
+<div class="book" id="_book"></div>
+<div class="corner">
+    <div class="status" id="_corner"></div>
+    <div id="positions"></div>
+</div>
+<div id="output"></div>
+
+<script type="text/javascript">
+// WebSocket connection to OKX
+// ideas short eth, sol, uni
+function ws_connect() {
+    ws = new WebSocket(apiUrl_private);
+    // Connection opened
+    ws.onopen = function(event){
+        document.getElementById("_corner").innerHTML = "online " + calcPingPong();
+        output_txt('WebSocket is open now.');
+        ws_login();
+        startPing();
+    }
+    // Connection closed
+    ws.onclose = function(event){
+        document.getElementById("_corner").innerHTML = "offline " + calcPingPong();
+        output_txt('WebSocket is closed now.');
+        stopPing();
+        reconnect();
+    };
+
+    // Handle errors
+    ws.onerror = function(error) {
+        //stopPing();
+        output_txt('WebSocket error observed: ' + _JSON(error));
+    };
+    // Listen for messages
+    ws.onmessage = function(event) {
+        let data = _JSON(event.data);
+        if(event.data == "pong"){
+            /*let positions = fetch_positions();
+            if(positions.code = "0"){
+                display_positions(positions.data);
+                console.log(positions);
+            }*/
+            last_pong = Date.now();
+            pong_counter++;
+            if(print_pong)
+                output_txt(event.data)
+        }
+        else if(data.event === 'login' && data.code === '0'){
+                sub_positions_channel();
+                //sub_orders_channel();
+                if(apiUrl_private.includes("?brokerId=9999"))
+                    document.getElementById("_corner").innerHTML = "demo " + calcPingPong();
+                else
+                    document.getElementById("_corner").innerHTML = "live " + calcPingPong();
+                output_txt("login ok: " + JSON.stringify(data));
+        }
+        else if(data?.arg?.channel == 'positions' && data.event !== 'subscribe'){ // Handle positions updates
+                //output_txt('Positions update: ' + JSON.stringify(data));
+                //console.log(data);
+                //console.log(JSON.stringify(data));
+                display_positions(data.data);    
+            }
+        /*else if(data?.arg?.channel == 'orders' && data.event !== 'subscribe'){ // Handle orders updates
+            output_txt('Orders update: ' + JSON.stringify(data));
+            console.log(data);
+            console.log(JSON.stringify(data));
+            display_orders(data.data);    
+        }*/
+        else
+            output_txt(' received: ' + JSON.stringify(data) );
+    };
+}
+
+function ws_login() {
+    const timestamp = Math.floor( new Date().getTime() / 1000 );
+    const timestamp_str = timestamp.toString();
+    const sign = CryptoJS.enc.Base64.stringify(CryptoJS.HmacSHA256(timestamp_str +'GET'+'/users/self/verify', secretKey));
+    let login = `{
+    "op": "login",
+    "args": [
+        {
+        "apiKey": "` + apiKey + `",
+        "passphrase": "` + pass + `",
+        "timestamp": "` + timestamp_str + `",
+        "sign": "`+ sign +`"
+        }
+    ]
+    }`;
+    //console.log(login);
+    ws.send(login);
+}
+
+function reconnect() {
+    if(reconnect_bool){
+        output_txt('reconnecting in ' + reconnect_time + ' seconds...');
+        setTimeout(() => {
+            if(ws.readyState === WebSocket.CLOSED){
+                ws_connect();
+                setTimeout(() => checkConnection(), checkConnectionDelay);
+            }
+        }, reconnect_time * 1000);
+    }
+}
+
+function checkConnection() {
+    if(ws.readyState !== WebSocket.OPEN){
+    if(Math.round(Date.now() / 1000) - last_pong > offline){
+        document.getElementById("_corner").innerHTML = "offline " + Math.round( ((Date.now() / 1000) - last_pong) / 60 ) + " min";
+    }
+    output_txt('WebSocket connection failed.');
+    reconnect();
+    }
+}
+
+/*function sub_orders_channel(){
+    const subscribe = `{
+        "op": "subscribe",
+        "args": [
+            {
+                "channel": "orders",
+                "instType": "ANY"
+            }
+        ]
+    }`;
+    ws.send(subscribe);
+    output_txt('Subscribed to orders channel.');
+}*/
+
+function sub_positions_channel(){
+    const subscribe = `{
+        "op": "subscribe",
+        "args": [
+            {
+            "channel": "positions",
+            "instType": "ANY"
+            }
+        ]
+    }`;
+    ws.send(subscribe);
+    output_txt('Subscribed to positions channel.');
+}
+
+async function start_sequence(){
+    try {
+        await commissions();
+        await set_leverage(instId, 1);
+        await set_position_mode("net_mode");
+        await set_account_level(2);
+        ws_connect();
+        ws_public_connect();
+        await check_orders();
+        OHLCV("BTC-USDT-SWAP", "1m");
+    } catch (error) {
+        output_txt('Start sequence error: ' + JSON.stringify(error) + ' RETRY in ' + START_RETRY_DELAY/1000 + ' seconds');
+        setTimeout(start_sequence, START_RETRY_DELAY); // Retry after delay
+    }
+}
+
+start_sequence();
+
+</script>
+</body>
+</html>
